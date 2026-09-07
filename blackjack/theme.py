@@ -100,6 +100,7 @@ class Glyphs:
             self.back = "▓"
             self.gauge_full, self.gauge_empty = "█", "░"
             self.marker = "▸"
+            self.tick, self.cross, self.near = "✓", "✗", "≈"
             self.suits = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
         else:
             self.tl = self.tr = self.bl = self.br = "+"
@@ -109,4 +110,5 @@ class Glyphs:
             self.back = "#"
             self.gauge_full, self.gauge_empty = "#", "."
             self.marker = ">"
+            self.tick, self.cross, self.near = "+", "x", "~"
             self.suits = {"S": "s", "H": "h", "D": "d", "C": "c"}

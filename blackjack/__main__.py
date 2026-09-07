@@ -28,14 +28,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="seed the shuffle, for a reproducible shoe")
     p.add_argument("--ascii", action="store_true",
                    help="plain ASCII box drawing instead of Unicode")
+    p.add_argument("--no-trainer", dest="trainer", action="store_false",
+                   help="start with the trainer panel hidden (t toggles it)")
     return p.parse_args(argv)
 
 
-def _run(stdscr, game: Game, unicode_ok: bool) -> None:
+def _run(stdscr, game: Game, unicode_ok: bool, trainer_on: bool) -> None:
     curses.curs_set(0)
     stdscr.keypad(True)
     _install_theme()
-    App(stdscr, game, unicode_ok=unicode_ok).run()
+    App(stdscr, game, unicode_ok=unicode_ok, trainer_on=trainer_on).run()
 
 
 def _install_theme() -> bool:
@@ -61,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     unicode_ok = _unicode_ok() and not args.ascii
 
     try:
-        curses.wrapper(_run, game, unicode_ok)
+        curses.wrapper(_run, game, unicode_ok, args.trainer)
     except curses.error as exc:
         print(f"terminal error: {exc}", file=sys.stderr)
         return 1

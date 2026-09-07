@@ -5,7 +5,7 @@ from __future__ import annotations
 import curses
 import time
 
-from . import render, theme
+from . import render, theme, trainer
 from .cards import Card, Suit
 from .engine import Action, Game, Outcome, Phase
 from .render import center, gauge, keyhint, panel, put
@@ -15,6 +15,8 @@ SIDEBAR_W = 18
 HAND_INDENT = 2   # gutter that holds the active-hand marker
 HAND_GAP = 3      # columns between split hands
 BLOCK_H = 13      # dealer block + divider + player block, unpadded
+TABLE_MIN_H = BLOCK_H + 2   # the block plus the panel's own borders
+TRAINER_H = 3     # the trainer panel, same shape as the message panel
 MIN_W, MIN_H = 76, 22
 DEAL_TICK = 0.085          # seconds between cards during a deal
 FRAME_MS = 30
@@ -39,11 +41,14 @@ OUTCOME_STYLE = {
 
 
 class App:
-    def __init__(self, stdscr, game: Game, unicode_ok: bool = True):
+    def __init__(self, stdscr, game: Game, unicode_ok: bool = True,
+                 trainer_on: bool = True):
         self.scr = stdscr
         self.game = game
         self.g = Glyphs(unicode_ok)
         self.running = True
+        self.trainer_on = trainer_on
+        self.coach = trainer.Coach()
 
         # Animation state: how many cards of each hand are on screen yet.
         self.shown_dealer = 0
@@ -137,11 +142,14 @@ class App:
             curses.doupdate()
             return
 
-        table_h = h - 5
+        coached = self.trainer_shown
+        table_h = h - 5 - (TRAINER_H if coached else 0)
         table_w = w - SIDEBAR_W
         self._draw_table(0, 0, table_h, table_w)
         self._draw_sidebar(0, table_w, table_h, SIDEBAR_W)
-        self._draw_message(table_h, 0, 3, w)
+        if coached:
+            self._draw_trainer(table_h, 0, TRAINER_H, w)
+        self._draw_message(table_h + (TRAINER_H if coached else 0), 0, 3, w)
         self._draw_hints(h - 2, w)
         scr.noutrefresh()
         curses.doupdate()
@@ -269,6 +277,36 @@ class App:
 
             hx = cx + widths[i] + HAND_GAP
 
+    # -- trainer -----------------------------------------------------------
+    @property
+    def trainer_shown(self) -> bool:
+        """The trainer needs its own three rows, and the table will not give
+        them up below `TABLE_MIN_H`. Where they are not there, it sits out --
+        grading moves the player cannot read would only skew the tally."""
+        h, w = self.scr.getmaxyx()
+        if not self.trainer_on or w < MIN_W or h < MIN_H:
+            return False
+        return h - 5 - TRAINER_H >= TABLE_MIN_H
+
+    def _draw_trainer(self, y: int, x: int, h: int, w: int) -> None:
+        note, g = self.coach.note, self.g
+        panel(self.scr, y, x, h, w, g, "TRAINER", right=note.stats if note else "")
+        if note is None:
+            put(self.scr, y + 1, x + 2,
+                "Every move gets graded here, with the odds behind it."[: w - 4],
+                c(theme.DIM))
+            return
+
+        # The head always names the move to make; the mark says whether it was
+        # the one played.
+        glyph, pair = {"right": (g.tick, theme.WIN),
+                       "close": (g.near, theme.PUSH),
+                       "wrong": (g.cross, theme.LOSE)}[note.verdict]
+        head = f"{glyph} {note.move}. "
+        put(self.scr, y + 1, x + 2, head, c(pair, bold=True))
+        put(self.scr, y + 1, x + 2 + len(head),
+            note.body[: max(0, w - 4 - len(head))], c(theme.TEXT))
+
     # -- sidebar -----------------------------------------------------------
     def _draw_sidebar(self, y: int, x: int, h: int, w: int) -> None:
         game, g = self.game, self.g
@@ -292,7 +330,7 @@ class App:
         put(self.scr, row, ix, "Shoe", c(theme.LABEL))
         gauge(self.scr, row + 1, ix, iw, game.shoe.fraction_left, g)
 
-        row += 3
+        row += 2
         put(self.scr, row, ix, g.h * iw, c(theme.FRAME))
         row += 1
         self._stat(row, ix, iw, "Won", str(game.wins), theme.WIN)
@@ -300,10 +338,16 @@ class App:
         self._stat(row + 2, ix, iw, "Push", str(game.pushes), theme.PUSH)
         self._stat(row + 3, ix, iw, "BJ", str(game.blackjacks), theme.CHIP)
 
-        if game.round and game.round.insurance:
+        # Extras only get drawn while there is still panel left to draw them in.
+        extra, floor = row + 4, y + h - 1
+        if self.trainer_on and self.coach.calls and extra < floor:
+            self._stat(extra, ix, iw, "Calls",
+                       f"{self.coach.right}/{self.coach.calls}", theme.ACCENT)
+            extra += 1
+        if game.round and game.round.insurance and extra < floor:
             res = game.round.insurance_result
             pair = theme.WIN if res == "won" else theme.LOSE if res == "lost" else theme.LABEL
-            self._stat(row + 5, ix, iw, "Ins.", f"${game.round.insurance}", pair)
+            self._stat(extra, ix, iw, "Ins.", f"${game.round.insurance}", pair)
 
     def _stat(self, y: int, x: int, w: int, label: str, value: str,
               pair: int = theme.TEXT, bold: bool = False) -> None:
@@ -356,6 +400,8 @@ class App:
                      if a in avail]
         elif game.phase is Phase.SETTLED:
             hints = [("enter", "next hand", True)]
+        if not self.animating:
+            hints.append(("t", "trainer", self.trainer_shown))
 
         quit_w = 7
         x = 1
@@ -379,14 +425,19 @@ class App:
             self._reveal_all()
             self._sync_message()
             return
+        if key in (ord("t"), ord("T")):
+            self.trainer_on = not self.trainer_on
+            return
 
         if game.phase is Phase.BETTING:
             self._handle_betting(key)
         elif game.phase is Phase.INSURANCE:
             if key in (ord("y"), ord("Y")):
+                self._grade_insurance(True)
                 game.take_insurance(True)
                 self._after_engine()
             elif key in (ord("n"), ord("N"), 27):
+                self._grade_insurance(False)
                 game.take_insurance(False)
                 self._after_engine()
         elif game.phase is Phase.PLAYER:
@@ -417,6 +468,7 @@ class App:
             game.adjust_bet(step)
             return
         if key in (curses.KEY_ENTER, 10, 13, ord(" ")):
+            self.coach.clear()
             game.deal()
             if game.round:
                 self._reset_reveal(opening=True)
@@ -426,6 +478,8 @@ class App:
         game = self.game
         for action in game.available():
             if key == ord(action.key):
+                if self.trainer_shown:
+                    self.coach.review(game, action)
                 # Note where the split would land before acting: the engine may
                 # advance past the new hand (split aces finish immediately), so
                 # `active` afterwards is not where it was inserted.
@@ -436,6 +490,10 @@ class App:
                     self.shown_hands.insert(index + 1, 0)
                 self._after_engine()
                 return
+
+    def _grade_insurance(self, taken: bool) -> None:
+        if self.trainer_shown:
+            self.coach.review_insurance(self.game, taken)
 
     def _after_engine(self) -> None:
         """Queue up any new cards the engine just put on the table."""
