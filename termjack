@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Launcher: run the game from anywhere.
+exec python3 -m blackjack "$@"
