@@ -203,3 +203,7 @@ noticeably if the rules or payouts ever drift:
 win/lose/push 43.50% / 47.98% / 8.52%
 house edge    0.462%
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
