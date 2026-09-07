@@ -199,3 +199,21 @@ termjack               launcher
 - The animation tests deal on a seeded shoe. The unseeded one was passing on
   the luck of the shuffle: a natural off the deal turns the hole card during
   the opening, which broke the moment an unrelated test changed draw order.
+
+### 2026-09-07 (last) — animation toggle
+- `a` turns the deal animation on and off, with `--no-animation` to start that
+  way, matching how `t` and `c` are paired with their flags. With it off
+  `_stage` hands straight to `_reveal_all`, so the engine's cards go onto the
+  felt as they are dealt -- and the hole card is still a hole card.
+- It is handled ahead of the any-key skip, so pressing it part way through a
+  deal both turns the animation off and drops what is still coming, which is
+  the moment a player actually reaches for it.
+- Its hint leads the toggles. `c` and `t` describe panels you can see for
+  yourself; whether the animation is on is invisible on an idle felt, so the
+  hint (bright on, dim off) is the only thing that says so. At 76 columns --
+  the documented minimum -- the bar has room for two of the three, and this
+  ordering means `[t]rainer` is the one that gives way instead of `[a]nim`.
+- Fixed a latent overrun in `_draw_hints` that adding a seventh hint exposed:
+  it drew each hint and only then checked whether it had gone too far, so the
+  last one could run into `[q]uit`. It now measures first, via a new
+  `render.hint_width` sharing `render.hint_rest` with `keyhint`.

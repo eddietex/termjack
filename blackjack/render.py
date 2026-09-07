@@ -218,12 +218,21 @@ def gauge(win, y: int, x: int, width: int, fraction: float, g: Glyphs,
     put(win, y, x + filled, g.gauge_empty * (width - filled), c(theme.DIM))
 
 
+def hint_rest(key: str, label: str) -> str:
+    """The part of a key hint after the bracket: `[h]it`, else `[p] split`."""
+    if label.lower().startswith(key.lower()):
+        return label[len(key):]
+    return " " + label
+
+
+def hint_width(key: str, label: str) -> int:
+    """Columns `keyhint` takes, so a bar can be measured before it is drawn."""
+    return len(key) + 2 + len(hint_rest(key, label))
+
+
 def keyhint(win, y: int, x: int, key: str, label: str, enabled: bool = True) -> int:
     """`[h]it` when the key is the word's first letter, else `[p] split`."""
-    if label.lower().startswith(key.lower()):
-        rest = label[len(key):]
-    else:
-        rest = " " + label
+    rest = hint_rest(key, label)
     if enabled:
         put(win, y, x, "[", c(theme.DIM))
         put(win, y, x + 1, key, c(theme.KEY, bold=True))

@@ -8,9 +8,8 @@ whether a panel fits, and where. Only the parts that never draw belong here.
 
 from __future__ import annotations
 
-import unittest
-
 import random
+import unittest
 
 from blackjack import app as app_mod, render, trainer
 from blackjack.app import App, visible
@@ -227,6 +226,73 @@ class DealAnimationTests(unittest.TestCase):
 
         self.assertEqual(app._shown(0) + app._shown(-1), 3)
         self.assertAlmostEqual(app.beat_at, start + sum(spans))
+
+
+class AnimationToggleTests(unittest.TestCase):
+    """`a` turns the deal animation off, and the cards go straight down."""
+
+    def deal(self, animate_on: bool = True) -> App:
+        app = App(Screen(), Game(bankroll=500, rng=random.Random(3)),
+                  animate_on=animate_on)
+        app.handle(ord(" "))
+        return app
+
+    def test_a_toggles_the_animation(self):
+        app = App(Screen(), Game(bankroll=500))
+        app.handle(ord("a"))
+        self.assertFalse(app.animate_on)
+        app.handle(ord("A"))
+        self.assertTrue(app.animate_on)
+
+    def test_a_dealt_round_lands_at_once_with_it_off(self):
+        app = self.deal(animate_on=False)
+        rnd = app.game.round
+        self.assertFalse(app.animating)
+        self.assertEqual(app.queue, [])
+        self.assertEqual(app._shown(0), len(rnd.hands[0].cards))
+        self.assertEqual(app._shown(-1), len(rnd.dealer.cards))
+
+    def test_the_hole_card_is_still_a_hole_card_with_it_off(self):
+        """Skipping the animation must not skip the rules with it."""
+        app = self.deal(animate_on=False)
+        self.assertTrue(app.game.round.hole_down)
+        self.assertFalse(app.hole_up)
+        self.assertTrue(app.hole_hidden)
+
+        while app.game.phase is Phase.PLAYER:
+            app.handle(ord("s"))
+        self.assertFalse(app.game.round.hole_down)
+        self.assertTrue(app.hole_up)
+
+    def test_pressing_it_mid_deal_drops_the_rest_of_the_deal(self):
+        """It is the one toggle that works while cards are still coming --
+        which is exactly when a player reaches for it."""
+        app = self.deal()
+        self.assertTrue(app.animating)
+        app.handle(ord("a"))
+
+        self.assertFalse(app.animate_on)
+        self.assertFalse(app.animating)
+        self.assertEqual(app._shown(0), len(app.game.round.hands[0].cards))
+        self.assertEqual(app.message, app.game.message)
+
+    def test_turning_it_back_on_animates_the_next_action(self):
+        app = self.deal(animate_on=False)
+        app.handle(ord("a"))
+        self.assertFalse(app.animating)      # nothing owed for a landed round
+        app.handle(ord("h"))
+        self.assertTrue(app.animating)
+
+    def test_the_hint_bar_measures_a_hint_before_it_draws_it(self):
+        """`_draw_hints` stops on the last hint that fits, so nothing runs
+        into `[q]uit` in the corner."""
+        for key, label in (("a", "anim"), ("t", "trainer"), ("1/2/3", "chip"),
+                           ("enter", "deal"), ("p", "split")):
+            with self.subTest(key=key):
+                self.assertEqual(render.hint_width(key, label),
+                                 len(f"[{key}]") + len(render.hint_rest(key, label)))
+        self.assertEqual(render.hint_width("a", "anim"), len("[a]nim"))
+        self.assertEqual(render.hint_width("p", "split"), len("[p] split"))
 
 
 class ChartLayoutTests(unittest.TestCase):

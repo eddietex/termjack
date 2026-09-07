@@ -103,13 +103,15 @@ OUTCOME_STYLE = {
 
 class App:
     def __init__(self, stdscr, game: Game, unicode_ok: bool = True,
-                 trainer_on: bool = True, chart_on: bool = False):
+                 trainer_on: bool = True, chart_on: bool = False,
+                 animate_on: bool = True):
         self.scr = stdscr
         self.game = game
         self.g = Glyphs(unicode_ok)
         self.running = True
         self.trainer_on = trainer_on
         self.chart_on = chart_on
+        self.animate_on = animate_on
         self.coach = trainer.Coach()
 
         # Animation state: how many cards of each hand have landed, whether
@@ -152,6 +154,9 @@ class App:
         if rnd is None:
             return
         self.opening = opening
+        if not self.animate_on:
+            self._reveal_all()
+            return
         if opening:
             self.shown_dealer = 0
             self.shown_hands = [0] * len(rnd.hands)
@@ -730,17 +735,24 @@ class App:
                      if a in avail]
         elif game.phase is Phase.SETTLED:
             hints = [("enter", "next hand", True)]
+        # The animation hint leads the toggles because it is the only one
+        # whose state the table does not already show: a panel is visibly
+        # there or not, whereas an idle felt says nothing about the deal.
+        hints.append(("a", "anim", self.animate_on))
         if not self.animating:
             hints.append(("c", "chart", self.chart_visible))
             hints.append(("t", "trainer", self.trainer_shown))
 
+        # Measure before drawing, so the last hint that fits is the last one
+        # drawn rather than the first one to overrun [q]uit.
         quit_w = 7
         x = 1
         for key, label, on in hints:
-            width = keyhint(self.scr, y, x, key, label, on)
-            x += width + 3
-            if x > w - quit_w - 4:
+            width = render.hint_width(key, label)
+            if x + width > w - quit_w - 2:
                 break
+            keyhint(self.scr, y, x, key, label, on)
+            x += width + 3
         put(self.scr, y, w - quit_w - 1, "[q]uit", c(theme.DIM))
 
     # -- input -------------------------------------------------------------
@@ -751,6 +763,14 @@ class App:
             self.running = False
             return
         if key == curses.KEY_RESIZE:
+            return
+        # Ahead of the skip below, so that reaching for it part way through a
+        # deal both turns the animation off and drops what is still coming.
+        if key in (ord("a"), ord("A")):
+            self.animate_on = not self.animate_on
+            if not self.animate_on:
+                self._reveal_all()
+            self._sync_message()
             return
         if self.animating:
             self._reveal_all()

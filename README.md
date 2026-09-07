@@ -46,6 +46,7 @@ chart docks beside the table rather than over it.
 --ascii         plain ASCII box drawing, for terminals without Unicode
 --no-trainer    start with the trainer hidden
 --chart         start with the strategy chart shown
+--no-animation  deal without the animation
 ```
 
 ## Keys
@@ -61,9 +62,12 @@ chart docks beside the table rather than over it.
 | `r` | buy back in after going broke |
 | `t` | show or hide the trainer |
 | `c` | show or hide the chart for the dealer's upcard |
+| `a` | turn the deal animation on or off |
 | `q` | leave the table |
 
-Any key during a deal skips the animation.
+Any key during a deal skips the animation. `a` turns it off altogether, and
+is the one key that does its own job mid-deal rather than just skipping: the
+rest of the cards land at once and later hands are dealt straight down.
 
 ## At the table
 
@@ -79,7 +83,8 @@ who would rather not wait for it.
 
 The rhythm lives in a handful of constants at the top of `blackjack/app.py`
 (`PITCH`, `FLIP_FRAME`, `HOLE_BEAT`, `DRAW_BEAT`, `SETTLE_BEAT`), if you would
-like the game faster or slower than a real one.
+like the game faster or slower than a real one. `a` — or `--no-animation` —
+turns the whole thing off and puts the cards straight on the felt.
 
 ## Trainer
 

@@ -32,16 +32,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="start with the trainer panel hidden (t toggles it)")
     p.add_argument("--chart", action="store_true",
                    help="start with the strategy chart shown (c toggles it)")
+    p.add_argument("--no-animation", dest="animate", action="store_false",
+                   help="deal without the animation (a toggles it)")
     return p.parse_args(argv)
 
 
 def _run(stdscr, game: Game, unicode_ok: bool, trainer_on: bool,
-         chart_on: bool) -> None:
+         chart_on: bool, animate_on: bool) -> None:
     curses.curs_set(0)
     stdscr.keypad(True)
     _install_theme()
     App(stdscr, game, unicode_ok=unicode_ok, trainer_on=trainer_on,
-        chart_on=chart_on).run()
+        chart_on=chart_on, animate_on=animate_on).run()
 
 
 def _install_theme() -> bool:
@@ -67,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     unicode_ok = _unicode_ok() and not args.ascii
 
     try:
-        curses.wrapper(_run, game, unicode_ok, args.trainer, args.chart)
+        curses.wrapper(_run, game, unicode_ok, args.trainer, args.chart,
+                       args.animate)
     except curses.error as exc:
         print(f"terminal error: {exc}", file=sys.stderr)
         return 1
