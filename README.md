@@ -129,12 +129,13 @@ blackjack/app.py       screen composition, animation, input
 tools/verify_odds.py   basic-strategy simulator, checks the house edge
 tests/test_engine.py   rules unit tests
 tests/test_trainer.py  odds, advice, and the whole strategy chart
+tests/test_app.py      key handling that never touches the screen
 ```
 
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests      # 81 tests
+python3 -m unittest discover -s tests      # 84 tests
 python3 tools/verify_odds.py               # ~500k hands of basic strategy
 ```
 

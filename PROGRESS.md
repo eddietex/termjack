@@ -80,7 +80,7 @@ termjack               launcher
 
 ## Verification
 
-- `python3 -m unittest discover -s tests` — 81 tests, all passing.
+- `python3 -m unittest discover -s tests` — 84 tests, all passing.
 - The trainer's expected values reproduce the basic-strategy chart in
   `tools/verify_odds.py` cell for cell: every hard total, every soft total,
   every pair. That is the check that matters — the advice is only worth

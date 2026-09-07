@@ -436,7 +436,7 @@ class App:
         if game.phase is Phase.BETTING:
             self._handle_betting(key)
         elif game.phase is Phase.INSURANCE:
-            if key in (ord("y"), ord("Y")):
+            if key in (ord("y"), ord("Y")) and game.can_insure():
                 self._grade_insurance(True)
                 game.take_insurance(True)
                 self._after_engine()
