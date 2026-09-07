@@ -65,6 +65,22 @@ chart docks beside the table rather than over it.
 
 Any key during a deal skips the animation.
 
+## At the table
+
+Cards are not simply there. They are pitched one at a time round the table,
+each landing face down and turning over where it lies, and the totals climb
+with them rather than being announced ahead of the cards. The dealer holds
+its hole card until the hands are played out, then turns it over on a beat of
+its own before drawing itself to 17. Nothing is booked while that is going
+on — the result, the outcome chips, and the chips in the sidebar all wait
+until the hand has been called, so the table cannot give a round away over
+the dealer's shoulder. Any key drops the rest of the deal at once for anyone
+who would rather not wait for it.
+
+The rhythm lives in a handful of constants at the top of `blackjack/app.py`
+(`PITCH`, `FLIP_FRAME`, `HOLE_BEAT`, `DRAW_BEAT`, `SETTLE_BEAT`), if you would
+like the game faster or slower than a real one.
+
 ## Trainer
 
 Every decision you make — hit, stand, double, split, and the insurance call —

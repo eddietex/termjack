@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import curses
 import time
+from typing import NamedTuple
 
 from . import render, theme, trainer
 from .cards import Card, Suit
-from .engine import Action, Game, Outcome, Phase
+from .engine import Action, Game, Hand, Outcome, Phase
 from .render import center, gauge, keyhint, panel, put
 from .theme import Glyphs, c
 
@@ -36,8 +37,42 @@ CHART_OVER_H = CHART_BODY_H + 2
 CARDS_MIN_W = 38    # felt the table will not give up to dock the chart beside
 
 MIN_W, MIN_H = 76, 22
-DEAL_TICK = 0.085          # seconds between cards during a deal
 FRAME_MS = 30
+
+# The rhythm of the deal, in seconds. Nothing lands the moment it is played:
+# a card is pitched, pauses face down, then turns over, and the beats around
+# the hole card are longer because that is where a table holds its breath.
+PITCH = 0.16          # dead air before a card is pitched
+FLIP_FRAME = 0.055    # one frame of a card turning over
+FLIP_TIME = FLIP_FRAME * len(render.FLIP_FRAMES)
+HOLE_BEAT = 0.55      # before the dealer turns the hole card up
+DRAW_BEAT = 0.30      # before each card the dealer draws for itself
+SETTLE_BEAT = 0.45    # after the last card, before the result is called
+
+
+class Beat(NamedTuple):
+    """One step of the deal: a card turning over, or a held pause.
+
+    `delay` is the dead air in front of it; a card beat then runs for the
+    length of a turn, and a `wait` beat is nothing but its delay.
+    """
+    kind: str      # 'card', 'hole' or 'wait'
+    which: int     # hand index, or -1 for the dealer
+    index: int     # which card of that hand
+    delay: float
+
+    @property
+    def span(self) -> float:
+        return self.delay + (0.0 if self.kind == "wait" else FLIP_TIME)
+
+
+def visible(hand: Hand, shown: int) -> Hand:
+    """The hand as far as it has been dealt, so its total counts up with the
+    cards on the felt instead of being announced before they land."""
+    if shown >= len(hand.cards):
+        return hand
+    return Hand(cards=hand.cards[:shown], bet=hand.bet, doubled=hand.doubled,
+                from_split=hand.from_split)
 
 def total_text(hand) -> str:
     """Badge text for a hand. The outcome chip already says BUST/BLACKJACK, so
@@ -77,41 +112,19 @@ class App:
         self.chart_on = chart_on
         self.coach = trainer.Coach()
 
-        # Animation state: how many cards of each hand are on screen yet.
+        # Animation state: how many cards of each hand have landed, whether
+        # the hole card has been turned up, and the beats still to play.
         self.shown_dealer = 0
         self.shown_hands: list[int] = []
-        self.last_tick = 0.0
+        self.hole_up = False
+        self.queue: list[Beat] = []
+        self.beat: Beat | None = None
+        self.beat_at = 0.0
         self.opening = False
         self.message = game.message
         self._splash = (Card("A", Suit.SPADES), Card("K", Suit.HEARTS))
 
     # -- animation ---------------------------------------------------------
-    def _reset_reveal(self, opening: bool) -> None:
-        rnd = self.game.round
-        self.opening = opening
-        if opening:
-            self.shown_dealer = 0
-            self.shown_hands = [0]
-        else:
-            self.shown_hands = list(self.shown_hands) if self.shown_hands else [0]
-        if rnd:
-            while len(self.shown_hands) < len(rnd.hands):
-                self.shown_hands.append(0)
-        self.last_tick = time.monotonic()
-
-    def _slots(self) -> list[tuple[int, int]]:
-        """Reveal order as (hand index or -1 for dealer, card index)."""
-        rnd = self.game.round
-        if not rnd:
-            return []
-        if self.opening:
-            return [(0, 0), (-1, 0), (0, 1), (-1, 1)]
-        order: list[tuple[int, int]] = []
-        for i, hand in enumerate(rnd.hands):
-            order += [(i, j) for j in range(len(hand.cards))]
-        order += [(-1, j) for j in range(len(rnd.dealer.cards))]
-        return order
-
     def _shown(self, which: int) -> int:
         if which < 0:
             return self.shown_dealer
@@ -127,32 +140,119 @@ class App:
                 self.shown_hands.append(0)
             self.shown_hands[which] = count
 
+    def _stage(self, opening: bool) -> None:
+        """Script whatever the engine has just put on the table.
+
+        The engine resolves a whole action at once -- a split deals two cards,
+        the dealer draws itself out to 17 in one go -- so the difference
+        between what it holds and what is on the felt becomes the queue of
+        beats that puts the rest down one card at a time.
+        """
+        rnd = self.game.round
+        if rnd is None:
+            return
+        self.opening = opening
+        if opening:
+            self.shown_dealer = 0
+            self.shown_hands = [0] * len(rnd.hands)
+            self.hole_up = False
+
+        beats: list[Beat] = []
+        dealt = [min(self._shown(i), len(h.cards)) for i, h in enumerate(rnd.hands)]
+        dealer_dealt = min(self.shown_dealer, len(rnd.dealer.cards))
+
+        if opening:
+            # Pitched one at a time round the table, the dealer's second card
+            # face down: player, dealer, player, hole.
+            for which, idx in ((0, 0), (-1, 0), (0, 1), (-1, 1)):
+                beats.append(Beat("card", which, idx, PITCH))
+            dealt[0], dealer_dealt = 2, 2
+
+        for i, hand in enumerate(rnd.hands):
+            for j in range(dealt[i], len(hand.cards)):
+                beats.append(Beat("card", i, j, PITCH))
+        if not rnd.hole_down and not self.hole_up:
+            beats.append(Beat("hole", -1, 1, HOLE_BEAT))
+        for j in range(max(dealer_dealt, 2), len(rnd.dealer.cards)):
+            beats.append(Beat("card", -1, j, DRAW_BEAT))
+        # Let the last card sit for a moment before the table calls the round.
+        if beats and self.game.phase is Phase.SETTLED:
+            beats.append(Beat("wait", 0, 0, SETTLE_BEAT))
+
+        if not beats:
+            return
+        self.queue.extend(beats)
+        if self.beat is None:
+            self.beat, self.beat_at = self.queue.pop(0), time.monotonic()
+
     @property
     def animating(self) -> bool:
-        return any(self._shown(w) <= i for w, i in self._slots())
+        return self.beat is not None
+
+    def _land(self, beat: Beat) -> None:
+        """Commit a finished beat: the card is down, or the hole card is up."""
+        if beat.kind == "card":
+            self._show(beat.which, beat.index + 1)
+        elif beat.kind == "hole":
+            self.hole_up = True
 
     def _advance_reveal(self) -> None:
-        """Turn over the next card, if enough time has passed."""
-        if not self.animating:
-            if self.opening:
-                self.opening = False
-            return
+        """Retire every beat whose time has run out, and start the next."""
         now = time.monotonic()
-        if now - self.last_tick < DEAL_TICK:
-            return
-        self.last_tick = now
-        for which, idx in self._slots():
-            if self._shown(which) <= idx:
-                self._show(which, idx + 1)
-                return
+        while self.beat is not None and now - self.beat_at >= self.beat.span:
+            self._land(self.beat)
+            # Chain from when the beat was due rather than from now, so a slow
+            # frame does not stretch the deal.
+            self.beat_at += self.beat.span
+            self.beat = self.queue.pop(0) if self.queue else None
+        if self.beat is None:
+            self.opening = False
+
+    @property
+    def hole_hidden(self) -> bool:
+        """Whether the dealer's second card is face down on screen.
+
+        It is pitched face down and stays down until the dealer takes it, so
+        the turn it arrives on must not reach the face and neither must the
+        pause before it comes up. The one moment it is neither down nor up is
+        its own turn, which draws the card itself.
+        """
+        if self.hole_up:
+            return False
+        beat = self.beat
+        return not (beat is not None and beat.kind == "hole"
+                    and self._turn(-1) is not None)
+
+    def _turn(self, which: int) -> tuple[int, int] | None:
+        """The card of this hand mid-turn, as `(index, frame)`, or None."""
+        beat = self.beat
+        if beat is None or beat.kind == "wait" or beat.which != which:
+            return None
+        elapsed = time.monotonic() - self.beat_at - beat.delay
+        if elapsed < 0:
+            return None
+        return beat.index, min(int(elapsed / FLIP_FRAME),
+                               len(render.FLIP_FRAMES) - 1)
+
+    def _staged(self, which: int) -> int:
+        """Cards of a hand that need room on the felt: those already down,
+        plus the one on its way in, so the layout does not shuffle sideways
+        half way through a turn."""
+        turn = self._turn(which)
+        return max(self._shown(which), turn[0] + 1) if turn else self._shown(which)
 
     def _reveal_all(self) -> None:
+        """Drop the rest of the deal on the table at once, for a player who
+        would rather not wait for it."""
         rnd = self.game.round
+        self.queue.clear()
+        self.beat = None
+        self.opening = False
         if not rnd:
             return
         self.shown_dealer = len(rnd.dealer.cards)
         self.shown_hands = [len(h.cards) for h in rnd.hands]
-        self.opening = False
+        self.hole_up = not rnd.hole_down
 
     def _sync_message(self) -> None:
         if not self.animating:
@@ -291,10 +391,12 @@ class App:
         put(self.scr, y, x, "DEALER", c(theme.LABEL, bold=True))
 
         shown = min(self.shown_dealer, len(rnd.dealer.cards))
-        hidden = rnd.hole_down and shown >= 2
-        if shown >= 2 and not rnd.hole_down:
-            render.badge(self.scr, y, x + HAND_INDENT + 6, rnd.dealer.label(),
-                         theme.LOSE if rnd.dealer.is_bust else theme.TEXT)
+        turn = self._turn(-1)
+        hidden = self.hole_hidden
+        if self.hole_up and shown >= 2:
+            seen = visible(rnd.dealer, shown)
+            render.badge(self.scr, y, x + HAND_INDENT + 6, seen.label(),
+                         theme.LOSE if seen.is_bust else theme.TEXT)
         elif shown >= 1:
             # Only the upcard is known; show its value quietly.
             put(self.scr, y, x + HAND_INDENT + 7,
@@ -304,7 +406,7 @@ class App:
                                 indent=0, gap=0)
         render.draw_hand(self.scr, y + 1, x + HAND_INDENT, rnd.dealer.cards, g,
                          hole_down=hidden, reveal=shown, step=step,
-                         avail=w - HAND_INDENT)
+                         avail=w - HAND_INDENT, turn=turn)
 
     def _draw_hands(self, y: int, x: int, w: int) -> None:
         rnd, g = self.game.round, self.g
@@ -315,7 +417,7 @@ class App:
 
         # One pitch for every hand, so the table reads evenly, then give each
         # hand exactly the width it needs and pack them left to right.
-        counts = [max(1, self._shown(i)) for i in range(n)]
+        counts = [max(1, self._staged(i)) for i in range(n)]
         step = render.pick_step(counts, w, HAND_INDENT, HAND_GAP)
         widths = [render.hand_width(c, step) for c in counts]
         slack = w - sum(HAND_INDENT + wd for wd in widths) - HAND_GAP * (n - 1)
@@ -332,14 +434,20 @@ class App:
                 put(self.scr, row, hx, g.marker, c(theme.ACCENT, bold=True))
                 put(self.scr, row + 1, hx, g.marker, c(theme.ACCENT, bold=True))
 
-            pair = theme.LOSE if hand.is_bust else (
-                theme.CHIP if hand.is_blackjack else theme.TEXT)
-            badge_w = render.badge(self.scr, row, cx, total_text(hand), pair)
-            if hand.doubled:
-                put(self.scr, row, cx + badge_w + 1, "x2", c(theme.PUSH, bold=True))
+            # No total until there is a card to total; an empty seat reads
+            # as empty rather than as a hand worth nothing.
+            seen = visible(hand, self._shown(i))
+            if seen.cards:
+                pair = theme.LOSE if seen.is_bust else (
+                    theme.CHIP if seen.is_blackjack else theme.TEXT)
+                badge_w = render.badge(self.scr, row, cx, total_text(seen), pair)
+                if hand.doubled:
+                    put(self.scr, row, cx + badge_w + 1, "x2",
+                        c(theme.PUSH, bold=True))
 
             render.draw_hand(self.scr, row + 1, cx, hand.cards, g,
-                             reveal=self._shown(i), step=step, avail=avail)
+                             reveal=self._shown(i), step=step, avail=avail,
+                             turn=self._turn(i))
 
             foot = row + 5
             put(self.scr, foot, cx, f"${hand.bet}", c(theme.CHIP))
@@ -470,20 +578,39 @@ class App:
             note.body[: max(0, w - 4 - len(head))], c(theme.TEXT))
 
     # -- sidebar -----------------------------------------------------------
+    @property
+    def uncalled(self):
+        """The round whose result the engine has booked but the table has not
+        called yet. The engine settles the moment the last card is drawn; the
+        sidebar has to rewind that, or it gives the hand away while the cards
+        are still coming down."""
+        if self.animating and self.game.phase is Phase.SETTLED:
+            return self.game.round
+        return None
+
     def _draw_sidebar(self, y: int, x: int, h: int, w: int) -> None:
         game, g = self.game, self.g
+        held = self.uncalled
         panel(self.scr, y, x, h, w, g, "CHIPS")
         ix, iw = x + 2, w - 4
         row = y + 2
 
-        self._stat(row, ix, iw, "Bank", f"${game.bankroll}", theme.CHIP, bold=True)
-        self._stat(row + 1, ix, iw, "Bet", f"${game.bet}", theme.ACCENT, bold=True)
-
         # Chips owned = bankroll + anything still at risk on the table.
-        at_risk = 0
+        bank, at_risk = game.bankroll, 0
         if game.round and game.phase in (Phase.INSURANCE, Phase.PLAYER, Phase.DEALER):
             at_risk = sum(h.bet for h in game.round.hands) + game.round.insurance
-        net = game.bankroll + at_risk - game.starting_bankroll
+        elif held:
+            # Put the payouts back in the middle: nothing is pushed across
+            # until the hand has been called.
+            bank -= sum(hand.payout for hand in held.hands)
+            if held.insurance_result == "won":
+                bank -= held.insurance * 3
+            at_risk = sum(hand.bet for hand in held.hands) + held.insurance
+
+        self._stat(row, ix, iw, "Bank", f"${bank}", theme.CHIP, bold=True)
+        self._stat(row + 1, ix, iw, "Bet", f"${game.bet}", theme.ACCENT, bold=True)
+
+        net = bank + at_risk - game.starting_bankroll
         text = f"-${abs(net)}" if net < 0 else f"+${net}" if net > 0 else "$0"
         self._stat(row + 2, ix, iw, "Net", text,
                    theme.WIN if net > 0 else theme.LOSE if net < 0 else theme.LABEL)
@@ -495,10 +622,11 @@ class App:
         row += 2
         put(self.scr, row, ix, g.h * iw, c(theme.FRAME))
         row += 1
-        self._stat(row, ix, iw, "Won", str(game.wins), theme.WIN)
-        self._stat(row + 1, ix, iw, "Lost", str(game.losses), theme.LOSE)
-        self._stat(row + 2, ix, iw, "Push", str(game.pushes), theme.PUSH)
-        self._stat(row + 3, ix, iw, "BJ", str(game.blackjacks), theme.CHIP)
+        won, lost, push, bj = self._uncounted(held)
+        self._stat(row, ix, iw, "Won", str(game.wins - won), theme.WIN)
+        self._stat(row + 1, ix, iw, "Lost", str(game.losses - lost), theme.LOSE)
+        self._stat(row + 2, ix, iw, "Push", str(game.pushes - push), theme.PUSH)
+        self._stat(row + 3, ix, iw, "BJ", str(game.blackjacks - bj), theme.CHIP)
 
         # Extras only get drawn while there is still panel left to draw them in.
         extra, floor = row + 4, y + h - 1
@@ -511,9 +639,22 @@ class App:
                 self._stat(extra, ix, iw, "Calls %", f"{pct}%", theme.ACCENT)
                 extra += 1
         if game.round and game.round.insurance and extra < floor:
-            res = game.round.insurance_result
+            # The side bet is settled off the hole card, so it keeps its own
+            # counsel until the hole card is up.
+            res = game.round.insurance_result if self.hole_up else None
             pair = theme.WIN if res == "won" else theme.LOSE if res == "lost" else theme.LABEL
             self._stat(extra, ix, iw, "Ins.", f"${game.round.insurance}", pair)
+
+    def _uncounted(self, held) -> tuple[int, int, int, int]:
+        """Wins, losses, pushes and blackjacks the engine has already tallied
+        for a round the table has not called yet."""
+        if held is None:
+            return 0, 0, 0, 0
+        outs = [hand.outcome for hand in held.hands]
+        bj = outs.count(Outcome.BLACKJACK)
+        return (bj + outs.count(Outcome.WIN),
+                outs.count(Outcome.LOSE) + outs.count(Outcome.BUST),
+                outs.count(Outcome.PUSH), bj)
 
     def _stat(self, y: int, x: int, w: int, label: str, value: str,
               pair: int = theme.TEXT, bold: bool = False) -> None:
@@ -530,8 +671,18 @@ class App:
             Phase.DEALER: "DEALER",
             Phase.SETTLED: "RESULT",
         }
-        focused = game.phase in (Phase.PLAYER, Phase.INSURANCE)
-        panel(self.scr, y, x, h, w, self.g, titles.get(game.phase, ""), focused=focused)
+        # While cards are still landing the round has not reached the player,
+        # whatever phase the engine has already moved on to: the title says
+        # what the table is doing, and the focus ring waits its turn.
+        if self.animating:
+            title = "DEALING" if self.opening else (
+                "DEALER" if game.phase in (Phase.DEALER, Phase.SETTLED)
+                else titles.get(game.phase, ""))
+        else:
+            title = titles.get(game.phase, "")
+        focused = (not self.animating
+                   and game.phase in (Phase.PLAYER, Phase.INSURANCE))
+        panel(self.scr, y, x, h, w, self.g, title, focused=focused)
 
         text = self.message
         pair = theme.TEXT
@@ -540,9 +691,22 @@ class App:
             pair = theme.WIN if "you win" in low else (
                 theme.LOSE if "you lose" in low else theme.PUSH)
         elif self.animating:
-            text = "Dealing…" if self.opening else "…"
+            text = self._dealing_text()
             pair = theme.DIM
         put(self.scr, y + 1, x + 2, text[: max(0, w - 4)], c(pair, bold=True))
+
+    def _dealing_text(self) -> str:
+        """What the table is doing, while it is doing it."""
+        beat = self.beat
+        if beat is None:
+            return "…"
+        if beat.kind == "hole":
+            return "Dealer turns the hole card…"
+        if self.opening:
+            return "Dealing…"
+        if beat.which < 0:
+            return "Dealer draws…"
+        return "…"
 
     def _draw_hints(self, y: int, w: int) -> None:
         game, g = self.game, self.g
@@ -640,8 +804,7 @@ class App:
         if key in (curses.KEY_ENTER, 10, 13, ord(" ")):
             self.coach.clear()
             game.deal()
-            if game.round:
-                self._reset_reveal(opening=True)
+            self._stage(opening=True)
             self.message = game.message
 
     def _handle_player(self, key: int) -> None:
@@ -657,6 +820,10 @@ class App:
                 before = len(game.round.hands)
                 game.act(action)
                 if len(game.round.hands) != before:
+                    # One card of the pair has moved across, so the hand it
+                    # left is back down to a single card and both halves are
+                    # dealt to again.
+                    self._show(index, 1)
                     self.shown_hands.insert(index + 1, 0)
                 self._after_engine()
                 return
@@ -667,8 +834,7 @@ class App:
 
     def _after_engine(self) -> None:
         """Queue up any new cards the engine just put on the table."""
-        if self.game.round:
-            self._reset_reveal(opening=False)
+        self._stage(opening=False)
         self._sync_message()
 
     # -- loop --------------------------------------------------------------

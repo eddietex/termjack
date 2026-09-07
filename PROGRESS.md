@@ -161,3 +161,41 @@ termjack               launcher
   with the felt when the chart docks.
 - Checked in tmux at 76x22, 80x24, 92x24, 100x28 and 120x34, Unicode and
   `--ascii`, across betting, insurance, a pair, a soft hand and a split.
+
+### 2026-09-07 (later again) — casino pacing
+- The deal is now a queue of timed `Beat`s in `app.py` rather than one tick
+  counter: each names a card (or the hole card, or a held pause) and the dead
+  air in front of it. The engine still resolves a whole action at once, and
+  `_stage` turns the difference between what it holds and what is on the felt
+  into the beats that put the rest down a card at a time.
+- `render.draw_turning` animates a card turning over: it lands face down,
+  narrows through `╭─╮` to a bare `│` seen edge on, and opens out face up.
+  Five frames, and the mid-turn frames carry no rank because a card halfway
+  round shows none. Works in `--ascii` too (`+-+`, then `|`).
+- Beats chain from when they were due rather than from now, so a slow frame
+  does not stretch the rest of the deal.
+- The hole card gets a beat of its own (`HOLE_BEAT`), and the dealer's draws
+  are slower than the opening pitch. A `wait` beat holds the last card before
+  the round is called.
+- Chased down everything that gave the result away early: totals now count up
+  with the cards on the felt (`app.visible`) instead of reading the engine's
+  hand, an empty seat shows no total at all, the message panel stops titling
+  itself RESULT and lighting its focus ring mid-deal, and the sidebar rewinds
+  the payouts and the W/L/P/BJ tally the engine books at settlement until the
+  table has actually called the hand (`App.uncalled`).
+- Checked in tmux at 76x22 `--ascii`, 100x30 and 120x34 with the trainer and
+  a docked chart, frame by frame across the opening deal, a split, the hole
+  card turn, a dealer draw-out and the skip key.
+- Then leaked the hole card twice over, both times through the animation:
+  first because the turn it lands on ended face up like any other card, then,
+  fixing that, because the `HOLE_BEAT` pause let go of `hole_down` before the
+  turn had started. The card is now down unless the table has turned it up,
+  and the single moment in between is its own turn (`App.hole_hidden`).
+- New `tests/test_render.py`: a stub window that records what was written and
+  a stubbed colour lookup, so the drawing can be asserted on without a
+  terminal. It is what catches the first leak -- the pure frame table
+  (`render.turn_frame`) was right, the call site in `draw_hand` was not.
+  Both bugs were reproduced against the tests before the fixes went back in.
+- The animation tests deal on a seeded shoe. The unseeded one was passing on
+  the luck of the shuffle: a natural off the deal turns the hole card during
+  the opening, which broke the moment an unrelated test changed draw order.
