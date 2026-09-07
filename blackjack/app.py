@@ -344,6 +344,10 @@ class App:
             self._stat(extra, ix, iw, "Calls",
                        f"{self.coach.right}/{self.coach.calls}", theme.ACCENT)
             extra += 1
+            if extra < floor:
+                pct = round(100 * self.coach.right / self.coach.calls)
+                self._stat(extra, ix, iw, "Calls %", f"{pct}%", theme.ACCENT)
+                extra += 1
         if game.round and game.round.insurance and extra < floor:
             res = game.round.insurance_result
             pair = theme.WIN if res == "won" else theme.LOSE if res == "lost" else theme.LABEL
