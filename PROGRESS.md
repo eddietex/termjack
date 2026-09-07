@@ -11,7 +11,7 @@ record of how it got here and what is worth knowing before changing it.
 - **Language/stack:** Python 3 + stdlib `curses`. No `go`/`cargo` on this box
   and no `pip`, so third-party TUI kits (textual, bubbletea, ratatui) are out.
   stdlib curses means zero install steps.
-- **Target size:** 76x24 minimum; the real terminal here is 80x24. Wider and
+- **Target size:** 76x22 minimum; the real terminal here is 80x24. Wider and
   taller terminals get a centred, non-stretched felt.
 - **Rules:** traditional Vegas. 6-deck shoe, dealer stands on all 17 (S17),
   blackjack pays 3:2, insurance on a dealer ace at 2:1, double on any first
