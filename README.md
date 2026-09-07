@@ -17,7 +17,7 @@ A classic blackjack table in the terminal.
 │   │  ♦│ │  ♣│     │  ♣│ │  ♥│                              ││ Push         0 │
 │   ╰───╯ ╰───╯     ╰───╯ ╰───╯                              ││ BJ           0 │
 │   $25             $25                                      ││ Calls      1/1 │
-│                                                            ││                │
+│                                                            ││ Calls %   100% │
 ╰────────────────────────────────────────────────────────────╯╰────────────────╯
 ╭─ TRAINER ──────────────────────────────────────── split +0.33 / stand -0.16 ─╮
 │ ✓ Split. Always split 8s - 16 is the worst hand you can hold.                │
@@ -100,7 +100,15 @@ in units of your bet:
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-`Calls` in the sidebar keeps the running tally; only the best move counts.
+`Calls` in the sidebar keeps the running tally and `Calls %` the share of it
+you got right. Only the best move counts: a `≈` is close enough not to be
+worth scolding you over, but it does not score.
+
+The tally only takes calls you could read and calls you could make. Nothing
+is graded while the panel is down — `t` hides it, and on a terminal too short
+to seat its three rows it sits out rather than take them from the felt — and
+an insurance call you cannot cover is not graded either, since those chips
+never go down.
 
 The advice is not a lookup table. `trainer.py` prices every legal move from
 first principles each time: the dealer's chances of landing on 17, 18, 19, 20,
@@ -186,12 +194,13 @@ tools/verify_odds.py   basic-strategy simulator, checks the house edge
 tests/test_engine.py   rules unit tests
 tests/test_trainer.py  odds, advice, and the whole strategy chart
 tests/test_app.py      key handling and layout that never touch the screen
+tests/test_render.py   cards, gauges and panels, against a stub window
 ```
 
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests      # 100 tests
+python3 -m unittest discover -s tests      # 121 tests
 python3 tools/verify_odds.py               # ~500k hands of basic strategy
 ```
 
