@@ -25,7 +25,7 @@ A classic blackjack table in the terminal.
 ╭─ YOUR TURN ──────────────────────────────────────────────────────────────────╮
 │ Split.                                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- [h]it   [s]tand   [d]ouble   [t]rainer                                 [q]uit
+ [h]it   [s]tand   [d]ouble   [c]hart   [t]rainer                       [q]uit
 ```
 
 ## Play
@@ -36,7 +36,8 @@ A classic blackjack table in the terminal.
 
 No dependencies — Python 3.10 or newer and its standard `curses` module, which
 ships with Python on Linux and macOS. Needs a terminal of at least 76x22, or
-23 rows for the trainer panel to have somewhere to sit.
+23 rows for the trainer panel to have somewhere to sit. From 92 columns the
+chart docks beside the table rather than over it.
 
 ```
 --bankroll N    starting chips (default 500)
@@ -44,6 +45,7 @@ ships with Python on Linux and macOS. Needs a terminal of at least 76x22, or
 --seed N        seed the shuffle for a reproducible shoe
 --ascii         plain ASCII box drawing, for terminals without Unicode
 --no-trainer    start with the trainer hidden
+--chart         start with the strategy chart shown
 ```
 
 ## Keys
@@ -58,6 +60,7 @@ ships with Python on Linux and macOS. Needs a terminal of at least 76x22, or
 | `y` `n` | take or decline insurance |
 | `r` | buy back in after going broke |
 | `t` | show or hide the trainer |
+| `c` | show or hide the chart for the dealer's upcard |
 | `q` | leave the table |
 
 Any key during a deal skips the animation.
@@ -102,6 +105,38 @@ the chart is a 16 made of three or more cards against a ten, which really does
 stand — the low cards it is built from are the ones that would have rescued a
 hit. It is a coin flip either way, so it grades as `≈`.
 
+## Chart
+
+`c` puts up the strategy column for whatever the dealer is showing — the same
+question the trainer answers, asked ahead of the decision instead of after it.
+The row your hand is on is marked, and it follows the hand as it changes; here
+a pair of kings against an 8:
+
+```
+╭─ CHART ──────────────── vs 8 ─╮
+│ HARD           PAIRS          │
+│  4-9   hit      As     split  │
+│  10-11 double   2s-4s  hit    │
+│  12-16 hit      5s     double │
+│  17-20 stand    6s-7s  hit    │
+│                 8s-9s  split  │
+│ SOFT           ▸10s    stand  │
+│  A2-A6 hit                    │
+│  A7-A9 stand                  │
+│                               │
+╰───────────────────────────────╯
+```
+
+On a wide terminal the chart docks beside the felt, behind a divider, and the
+cards keep the rest. Where there is not enough width left to deal onto, it
+lays over the right of the table instead — `c` again puts the felt back.
+
+The column is derived, not transcribed: each row is priced by the same code
+that grades your moves, then rows that agree are merged into a range, which is
+how a column is memorised anyway. So the chart can never tell you one thing
+and the trainer another, and the ranges shift with the upcard — the hard
+block against an ace is two rows, against a 7 it is four.
+
 ## House rules
 
 Traditional Vegas shoe game:
@@ -124,18 +159,18 @@ blackjack/cards.py     Card / Suit / Shoe
 blackjack/engine.py    hands, the round state machine, payouts
 blackjack/theme.py     colour pairs and glyphs
 blackjack/render.py    panels, cards, gauges
-blackjack/trainer.py   expected values, the graded advice
+blackjack/trainer.py   expected values, the graded advice, the chart
 blackjack/app.py       screen composition, animation, input
 tools/verify_odds.py   basic-strategy simulator, checks the house edge
 tests/test_engine.py   rules unit tests
 tests/test_trainer.py  odds, advice, and the whole strategy chart
-tests/test_app.py      key handling that never touches the screen
+tests/test_app.py      key handling and layout that never touch the screen
 ```
 
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests      # 84 tests
+python3 -m unittest discover -s tests      # 100 tests
 python3 tools/verify_odds.py               # ~500k hands of basic strategy
 ```
 

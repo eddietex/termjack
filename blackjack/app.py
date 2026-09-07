@@ -17,6 +17,24 @@ HAND_GAP = 3      # columns between split hands
 BLOCK_H = 13      # dealer block + divider + player block, unpadded
 TABLE_MIN_H = BLOCK_H + 2   # the block plus the panel's own borders
 TRAINER_H = 3     # the trainer panel, same shape as the message panel
+
+# The chart. Two columns of rows -- hard and soft totals on the left, pairs on
+# the right -- sized to the widest each will ever be, so the block does not
+# resize as the dealer's upcard changes.
+CHART_MOVE_W = 6                  # 'double', the longest move word
+CHART_LABEL_W = 5                 # '12-16', 'A2-A7'
+CHART_PAIR_W = 6                  # '9s-10s'
+CHART_LEFT_W = 1 + CHART_LABEL_W + 1 + CHART_MOVE_W   # a marker gutter, then
+CHART_RIGHT_W = 1 + CHART_PAIR_W + 1 + CHART_MOVE_W   # the label and the move
+CHART_COL_GAP = 2
+CHART_BODY_W = CHART_LEFT_W + CHART_COL_GAP + CHART_RIGHT_W
+CHART_BODY_H = 10                 # HARD + 4, a blank, SOFT + 3; PAIRS + 7
+CHART_DOCK_W = CHART_BODY_W + 3   # a divider and a column of air either side
+CHART_DOCK_H = CHART_BODY_H + 1   # the heading, then the block
+CHART_OVER_W = CHART_BODY_W + 4   # its own borders instead of the divider
+CHART_OVER_H = CHART_BODY_H + 2
+CARDS_MIN_W = 38    # felt the table will not give up to dock the chart beside
+
 MIN_W, MIN_H = 76, 22
 DEAL_TICK = 0.085          # seconds between cards during a deal
 FRAME_MS = 30
@@ -31,6 +49,14 @@ def total_text(hand) -> str:
     return hand.label()
 
 
+CHART_STYLE = {
+    Action.HIT: theme.ACCENT,
+    Action.STAND: theme.PUSH,
+    Action.DOUBLE: theme.WIN,
+    Action.SPLIT: theme.KEY,
+}
+
+
 OUTCOME_STYLE = {
     Outcome.BLACKJACK: ("BLACKJACK", theme.CHIP),
     Outcome.WIN: ("WIN", theme.WIN),
@@ -42,12 +68,13 @@ OUTCOME_STYLE = {
 
 class App:
     def __init__(self, stdscr, game: Game, unicode_ok: bool = True,
-                 trainer_on: bool = True):
+                 trainer_on: bool = True, chart_on: bool = False):
         self.scr = stdscr
         self.game = game
         self.g = Glyphs(unicode_ok)
         self.running = True
         self.trainer_on = trainer_on
+        self.chart_on = chart_on
         self.coach = trainer.Coach()
 
         # Animation state: how many cards of each hand are on screen yet.
@@ -132,6 +159,12 @@ class App:
             self.message = self.game.message
 
     # -- drawing -----------------------------------------------------------
+    def _table_size(self) -> tuple[int, int]:
+        """Rows and columns the table pane gets, once the sidebar and the
+        panels under it have taken theirs."""
+        h, w = self.scr.getmaxyx()
+        return h - 5 - (TRAINER_H if self.trainer_shown else 0), w - SIDEBAR_W
+
     def draw(self) -> None:
         scr = self.scr
         scr.erase()
@@ -143,10 +176,11 @@ class App:
             return
 
         coached = self.trainer_shown
-        table_h = h - 5 - (TRAINER_H if coached else 0)
-        table_w = w - SIDEBAR_W
+        table_h, table_w = self._table_size()
         self._draw_table(0, 0, table_h, table_w)
         self._draw_sidebar(0, table_w, table_h, SIDEBAR_W)
+        if self.chart_visible and not self.chart_docked:
+            self._draw_chart_overlay(0, 0, table_h, table_w)
         if coached:
             self._draw_trainer(table_h, 0, TRAINER_H, w)
         self._draw_message(table_h + (TRAINER_H if coached else 0), 0, 3, w)
@@ -163,13 +197,24 @@ class App:
     def _draw_table(self, y: int, x: int, h: int, w: int) -> None:
         rnd, g = self.game.round, self.g
         shoe = f"shoe {self.game.shoe.fraction_left * 100:.0f}%"
-        panel(self.scr, y, x, h, w, g, "TABLE", right=shoe)
+
+        # A docked chart takes the right of the panel behind a divider; the
+        # felt keeps the rest. The overlay case is drawn after everything else.
+        docked = self.chart_docked
+        dx = x + w - 1 - CHART_DOCK_W if docked else 0
+        felt = w - (CHART_DOCK_W if docked else 0)
+
+        # The shoe reading belongs over the felt, so it moves in with it.
+        panel(self.scr, y, x, h, w, g, "TABLE", right="" if docked else shoe)
+        if docked:
+            put(self.scr, y, dx - len(shoe) - 3, f" {shoe} ", c(theme.LABEL))
+            self._draw_dock(y, dx, h)
 
         if rnd is None:
-            self._draw_idle(y, x, h, w)
+            self._draw_idle(y, x, h, felt)
             return
 
-        ix, iw = x + 2, w - 4
+        ix, iw = x + 2, felt - 4
         # Dealer block is 5 rows, the divider 1, the player block 7. Pad between
         # them, up to a limit, then centre the whole thing in the panel.
         pad = max(0, min(2, (h - 2 - BLOCK_H) // 3))
@@ -180,9 +225,28 @@ class App:
         py = divider + 1 + pad
 
         self._draw_dealer(dy, ix, iw)
-        put(self.scr, divider, x, self.g.tee_l + self.g.h * (w - 2) + self.g.tee_r,
+        # The rule between dealer and player stops at the chart's divider.
+        edge, cap = (dx, g.joint) if docked else (x + w - 1, g.tee_r)
+        put(self.scr, divider, x, g.tee_l + g.h * (edge - x - 1) + cap,
             c(theme.FRAME))
         self._draw_hands(py, ix, iw)
+
+    def _draw_dock(self, y: int, x: int, h: int) -> None:
+        """The chart's divider, and the block of rows to the right of it."""
+        g = self.g
+        put(self.scr, y, x, g.tee_d, c(theme.FRAME))
+        for row in range(1, h - 1):
+            put(self.scr, y + row, x, g.v, c(theme.FRAME))
+        put(self.scr, y + h - 1, x, g.tee_u, c(theme.FRAME))
+
+        top = y + 1 + max(0, (h - 2 - CHART_DOCK_H) // 2)
+        bx = x + 2
+        ch = self._chart()
+        put(self.scr, top, bx, "CHART", c(theme.TITLE, bold=True))
+        if ch is not None:
+            right = f"vs {ch.upcard}"
+            put(self.scr, top, bx + CHART_BODY_W - len(right), right, c(theme.LABEL))
+        self._draw_chart_body(top + 1, bx, ch, min(CHART_BODY_H, h - 3))
 
     def _draw_idle(self, y: int, x: int, h: int, w: int) -> None:
         game, g = self.game, self.g
@@ -200,16 +264,25 @@ class App:
         rules = ["6 decks  ·  dealer stands on all 17",
                  "blackjack pays 3:2  ·  insurance 2:1"]
         cards_w = render.hand_width(2)
-        block = cards_w + 5 + max(len(r) for r in rules)
+        rules_w = max(len(r) for r in rules)
+        # The rules sit beside the cards where the felt is wide enough for
+        # both -- a docked chart often means it is not -- and drop under the
+        # title where it is not, rather than being cut off mid-sentence.
+        beside = cards_w + 5 + rules_w <= w - 2
+        block = cards_w + 5 + rules_w if beside else cards_w
         bx = x + max(1, (w - block) // 2)
         top = mid - 5
 
         render.draw_card(self.scr, top, bx, self._splash[0], g)
         render.draw_card(self.scr, top, bx + render.SPREAD_STEP, self._splash[1], g)
-        for i, line in enumerate(rules):
-            put(self.scr, top + 1 + i, bx + cards_w + 5, line, c(theme.LABEL))
+        if beside:
+            for i, line in enumerate(rules):
+                put(self.scr, top + 1 + i, bx + cards_w + 5, line, c(theme.LABEL))
 
         center(self.scr, top + 5, x, w, "B L A C K J A C K", c(theme.TITLE, bold=True))
+        if not beside:
+            for i, line in enumerate(rules):
+                center(self.scr, top + 6 + i, x, w, line[: w - 2], c(theme.LABEL))
         center(self.scr, top + 8, x, w, f"Bet   ${game.bet}", c(theme.CHIP, bold=True))
         center(self.scr, top + 10, x, w, "press enter to deal", c(theme.ACCENT))
 
@@ -276,6 +349,95 @@ class App:
                              label, opair)
 
             hx = cx + widths[i] + HAND_GAP
+
+    # -- chart -------------------------------------------------------------
+    @property
+    def chart_shown(self) -> bool:
+        h, w = self.scr.getmaxyx()
+        return self.chart_on and w >= MIN_W and h >= MIN_H
+
+    @property
+    def chart_docked(self) -> bool:
+        """Whether the chart fits beside the felt rather than over it.
+
+        Docking is only worth it while the table keeps enough width to lay the
+        cards out; below that the chart takes the pane instead, where `c` is
+        the way back to the felt."""
+        if not self.chart_shown:
+            return False
+        table_h, table_w = self._table_size()
+        return (table_w - 4 - CHART_DOCK_W >= CARDS_MIN_W
+                and table_h - 2 >= CHART_DOCK_H)
+
+    @property
+    def chart_visible(self) -> bool:
+        """Whether the chart is actually on screen. Docked it always is, and
+        says so while it waits; over the felt it holds off until there is a
+        column to show, rather than smothering the bet with a placeholder."""
+        return self.chart_shown and (self.chart_docked or self._chart() is not None)
+
+    def _chart(self) -> trainer.Chart | None:
+        """The column for the dealer's upcard, once it is face up."""
+        if self.game.round is None or self.shown_dealer < 1:
+            return None
+        return trainer.chart_for(self.game)
+
+    def _chart_here(self, ch: trainer.Chart) -> trainer.ChartRow | None:
+        """The row the hand in front of the player sits on, so it can be lit
+        up. Only while there is a decision to make -- the rest of the time the
+        chart is being read, not followed."""
+        game = self.game
+        actions = game.available()
+        if not actions or self.animating:
+            return None
+        hand = game.round.hand
+        pair = hand.cards[0].value if Action.SPLIT in actions else None
+        found = ch.locate(hand.total, hand.soft, pair)
+        if found is None:
+            return None
+        block, i = found
+        return getattr(ch, block)[i]
+
+    def _draw_chart_overlay(self, y: int, x: int, h: int, w: int) -> None:
+        """The chart laid over the felt, hugging the right of the table pane so
+        the dealer and the first hand stay readable behind it."""
+        ch = self._chart()
+        oy = y + max(0, (h - CHART_OVER_H) // 2)
+        ox = x + max(0, w - 1 - CHART_OVER_W)
+        oh, ow = min(CHART_OVER_H, h), min(CHART_OVER_W, w)
+        panel(self.scr, oy, ox, oh, ow, self.g, "CHART",
+              right=f"vs {ch.upcard}" if ch else "")
+        for row in range(1, oh - 1):     # blank the felt showing through
+            put(self.scr, oy + row, ox + 1, " " * (ow - 2))
+        self._draw_chart_body(oy + 1, ox + 2, ch, oh - 2)
+
+    def _draw_chart_body(self, y: int, x: int, ch: trainer.Chart | None,
+                         height: int) -> None:
+        if ch is None:
+            put(self.scr, y, x, "Deal a hand to see a column.", c(theme.DIM))
+            return
+        here = self._chart_here(ch)
+        left = ([("head", "HARD")] + [("row", r) for r in ch.hard]
+                + [("gap", None), ("head", "SOFT")]
+                + [("row", r) for r in ch.soft])
+        right = [("head", "PAIRS")] + [("row", r) for r in ch.pairs]
+        self._draw_chart_column(y, x, left[:height], CHART_LABEL_W, here)
+        self._draw_chart_column(y, x + CHART_LEFT_W + CHART_COL_GAP,
+                                right[:height], CHART_PAIR_W, here)
+
+    def _draw_chart_column(self, y: int, x: int, items, label_w: int,
+                           here) -> None:
+        for i, (kind, item) in enumerate(items):
+            if kind == "head":
+                put(self.scr, y + i, x, item, c(theme.LABEL, bold=True))
+            elif kind == "row":
+                active = item is here
+                if active:
+                    put(self.scr, y + i, x, self.g.marker, c(theme.ACCENT, bold=True))
+                put(self.scr, y + i, x + 1, item.label,
+                    c(theme.TEXT if active else theme.LABEL, bold=active))
+                put(self.scr, y + i, x + 2 + label_w, item.action.label,
+                    c(CHART_STYLE[item.action], bold=True))
 
     # -- trainer -----------------------------------------------------------
     @property
@@ -405,6 +567,7 @@ class App:
         elif game.phase is Phase.SETTLED:
             hints = [("enter", "next hand", True)]
         if not self.animating:
+            hints.append(("c", "chart", self.chart_visible))
             hints.append(("t", "trainer", self.trainer_shown))
 
         quit_w = 7
@@ -431,6 +594,9 @@ class App:
             return
         if key in (ord("t"), ord("T")):
             self.trainer_on = not self.trainer_on
+            return
+        if key in (ord("c"), ord("C")):
+            self.chart_on = not self.chart_on
             return
 
         if game.phase is Phase.BETTING:

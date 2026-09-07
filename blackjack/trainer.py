@@ -27,8 +27,9 @@ and hands back a ``Note`` for the app to draw.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
-from .cards import Card
+from .cards import Card, Suit
 from .engine import Action, Game, hand_total
 
 # Card indices: 0 is an ace, 1-8 are the 2 through 9, 9 is any ten.
@@ -241,18 +242,17 @@ class Situation:
         return d[BUST] + sum(d[k] for k in range(5) if 17 + k < t)
 
 
-def read(game: Game) -> Situation | None:
-    """Work out what every legal move is worth on the hand in front of us."""
-    actions = game.available()
-    if not actions or game.round is None:
-        return None
-    hand = game.round.hand
-    upcard = game.round.dealer.cards[0]
+def evaluate(decks: int, cards: list[Card], upcard: Card,
+             actions: list[Action]) -> Situation:
+    """Price every action in `actions` for this hand against this upcard.
 
-    p = probabilities(composition(game.shoe.decks, hand.cards + [upcard]))
+    The one place expected values are worked out, so the coach's grade and the
+    chart's column can never come from different arithmetic.
+    """
+    p = probabilities(composition(decks, cards + [upcard]))
     up = _index(upcard)
     dealer = dealer_distribution(up, p)
-    total, soft = hand_total(hand.cards)
+    total, soft = hand_total(cards)
 
     memo: dict = {}
     evs = {}
@@ -264,10 +264,20 @@ def read(game: Game) -> Situation | None:
         elif action is Action.DOUBLE:
             evs[action] = ev_double(total, soft, p, dealer)
         elif action is Action.SPLIT:
-            evs[action] = ev_split(_index(hand.cards[0]), p, dealer)
+            evs[action] = ev_split(_index(cards[0]), p, dealer)
 
-    pair = _index(hand.cards[0]) if hand.is_pair else None
+    is_pair = len(cards) == 2 and cards[0].value == cards[1].value
+    pair = _index(cards[0]) if is_pair else None
     return Situation(evs, total, soft, pair, up, dealer, p)
+
+
+def read(game: Game) -> Situation | None:
+    """Work out what every legal move is worth on the hand in front of us."""
+    actions = game.available()
+    if not actions or game.round is None:
+        return None
+    return evaluate(game.shoe.decks, game.round.hand.cards,
+                    game.round.dealer.cards[0], actions)
 
 
 def _why(s: Situation) -> str:
@@ -394,3 +404,140 @@ class Coach:
         return self._book(Note("right" if wants else "wrong",
                                "Insure" if ev > 0 else "Decline", body,
                                f"insurance {ev:+.2f}"))
+
+
+# -- the chart -------------------------------------------------------------
+# The column a player would look up for the dealer's upcard, derived from the
+# same expected values the coach grades with rather than transcribed from a
+# book -- so the chart and the grade can never disagree.
+#
+# Rows are built from a representative two-card hand for each total, then
+# adjacent rows sharing a verdict are merged into a range: that is how a
+# column is actually memorised ("stand on 13 through 16 against a 6"), and it
+# keeps the whole strategy inside a panel small enough to sit beside the felt.
+
+_SUIT = Suit.SPADES
+
+# Two cards for each hard total: never an ace, and never a pair where there is
+# a choice, so the hand reads hard and the split is not on the table. A hard 4
+# can only be a pair of 2s and a hard 20 only two tens; neither is offered the
+# split here, so both still price as the hard totals they are.
+_HARD_MAKEUP = {
+    4: ("2", "2"), 5: ("3", "2"), 6: ("4", "2"), 7: ("5", "2"),
+    8: ("6", "2"), 9: ("7", "2"), 10: ("8", "2"), 11: ("9", "2"),
+    12: ("10", "2"), 13: ("10", "3"), 14: ("10", "4"), 15: ("10", "5"),
+    16: ("10", "6"), 17: ("10", "7"), 18: ("10", "8"), 19: ("10", "9"),
+    20: ("K", "10"),
+}
+
+HARD_TOTALS = tuple(sorted(_HARD_MAKEUP))          # 4 through 20
+SOFT_TOTALS = tuple(range(13, 21))                 # A,2 through A,9
+PAIR_VALUES = (11, 2, 3, 4, 5, 6, 7, 8, 9, 10)     # aces first, as charts read
+
+_TWO_CARD = [Action.HIT, Action.STAND, Action.DOUBLE]
+_PAIR_PLAY = _TWO_CARD + [Action.SPLIT]
+
+
+def _rank(index: int) -> str:
+    return "A" if index == ACE else "10" if index == TEN else str(index + 1)
+
+
+def _pair_rank(value: int) -> str:
+    return "A" if value == 11 else str(value)
+
+
+@dataclass(frozen=True)
+class ChartRow:
+    """One line of a column: the hands it covers, and the move for them."""
+    label: str
+    action: Action
+    lo: int
+    hi: int
+
+    def covers(self, key: int) -> bool:
+        return self.lo <= key <= self.hi
+
+
+@dataclass(frozen=True)
+class Chart:
+    """The three blocks of a strategy column, for one dealer upcard."""
+    up: int
+    hard: tuple[ChartRow, ...]
+    soft: tuple[ChartRow, ...]
+    pairs: tuple[ChartRow, ...]
+
+    @property
+    def upcard(self) -> str:
+        return _rank(self.up)
+
+    def locate(self, total: int, soft: bool, pair: int | None) -> tuple[str, int] | None:
+        """Which row the hand in front of the player sits on, if any.
+
+        `pair` is the value of a splittable pair, and None when splitting is
+        not on offer -- a pair that cannot be split is read off the hard or
+        soft block, which is what the player has to play it as.
+        """
+        if pair is not None:
+            block, key = self.pairs, pair
+        elif soft:
+            block, key = self.soft, total
+        else:
+            block, key = self.hard, total
+        name = "pairs" if pair is not None else ("soft" if soft else "hard")
+        for i, row in enumerate(block):
+            if row.covers(key):
+                return name, i
+        return None
+
+
+def _verdicts(decks: int, up: int, keys, makeup, actions) -> list[tuple[int, Action]]:
+    upcard = Card(_rank(up), _SUIT)
+    out = []
+    for key in keys:
+        cards = [Card(r, _SUIT) for r in makeup(key)]
+        out.append((key, evaluate(decks, cards, upcard, list(actions)).best))
+    return out
+
+
+def _merge(verdicts: list[tuple[int, Action]], label) -> tuple[ChartRow, ...]:
+    """Collapse consecutive keys that share a verdict into one row.
+
+    Only genuinely adjacent keys merge, so the ace pairs -- listed first but
+    numbered 11 -- never fold into the pair of 2s that follows them.
+    """
+    rows: list[ChartRow] = []
+    for key, action in verdicts:
+        if rows and rows[-1].action is action and key == rows[-1].hi + 1:
+            prev = rows[-1]
+            rows[-1] = ChartRow(label(prev.lo, key), action, prev.lo, key)
+        else:
+            rows.append(ChartRow(label(key, key), action, key, key))
+    return tuple(rows)
+
+
+def _span(one):
+    """Turn a formatter for one key into one for a run of them."""
+    return lambda lo, hi: one(lo) if lo == hi else f"{one(lo)}-{one(hi)}"
+
+
+@lru_cache(maxsize=None)
+def chart(decks: int, up: int) -> Chart:
+    """The strategy column for one upcard. Cached: it costs a few milliseconds
+    to derive and, since the trainer does not count, never changes."""
+    hard = _merge(_verdicts(decks, up, HARD_TOTALS, lambda t: _HARD_MAKEUP[t],
+                            _TWO_CARD), _span(str))
+    soft = _merge(_verdicts(decks, up, SOFT_TOTALS,
+                            lambda t: ("A", str(t - 11)), _TWO_CARD),
+                  _span(lambda t: f"A{t - 11}"))
+    pairs = _merge(_verdicts(decks, up, PAIR_VALUES,
+                             lambda v: (_pair_rank(v), _pair_rank(v)),
+                             _PAIR_PLAY),
+                   _span(lambda v: f"{_pair_rank(v)}s"))
+    return Chart(up, hard, soft, pairs)
+
+
+def chart_for(game: Game) -> Chart | None:
+    """The column for whatever the dealer is showing right now."""
+    if game.round is None or not game.round.dealer.cards:
+        return None
+    return chart(game.shoe.decks, _index(game.round.dealer.cards[0]))

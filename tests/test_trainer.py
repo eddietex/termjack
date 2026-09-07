@@ -188,6 +188,100 @@ class BasicStrategyTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# the chart column
+# ---------------------------------------------------------------------------
+def column(up: int) -> trainer.Chart:
+    """The chart the player would see with that card face up on the table."""
+    game, _ = situation([card(10), card(6)], up)
+    return trainer.chart_for(game)
+
+
+class ChartTests(unittest.TestCase):
+    """The column on screen has to say exactly what the coach grades by, so it
+    is held to the same ground truth: every row, against the book."""
+
+    def _row(self, block, key):
+        rows = [r for r in block if r.covers(key)]
+        self.assertEqual(len(rows), 1, f"{key} lands on {len(rows)} rows")
+        return rows[0]
+
+    def test_hard_rows_match_the_chart(self):
+        for up in UPCARDS:
+            ch = column(up)
+            for total in range(5, 21):
+                with self.subTest(up=up, total=total):
+                    row = self._row(ch.hard, total)
+                    self.assertIs(row.action, MOVES[CHART.HARD[total][up]],
+                                  f"hard {total} vs {up} reads '{row.label} "
+                                  f"{row.action.label}'")
+
+    def test_soft_rows_match_the_chart(self):
+        for up in UPCARDS:
+            ch = column(up)
+            for other in range(2, 10):
+                with self.subTest(up=up, soft=other):
+                    row = self._row(ch.soft, 11 + other)
+                    self.assertIs(row.action, MOVES[CHART.SOFT[other][up]],
+                                  f"A,{other} vs {up} reads '{row.label} "
+                                  f"{row.action.label}'")
+
+    def test_pair_rows_match_the_chart(self):
+        for up in UPCARDS:
+            ch = column(up)
+            for value in UPCARDS:
+                with self.subTest(up=up, pair=value):
+                    row = self._row(ch.pairs, value)
+                    self.assertIs(row.action, MOVES[CHART.PAIRS[value][up]],
+                                  f"{value}s vs {up} reads '{row.label} "
+                                  f"{row.action.label}'")
+
+    def test_rows_run_in_order_and_leave_no_gaps(self):
+        """Merging must not lose a total or double up on one."""
+        for up in UPCARDS:
+            ch = column(up)
+            for block, keys in ((ch.hard, trainer.HARD_TOTALS),
+                                (ch.soft, trainer.SOFT_TOTALS),
+                                (ch.pairs, trainer.PAIR_VALUES)):
+                with self.subTest(up=up, block=[r.label for r in block]):
+                    covered = [k for row in block for k in range(row.lo, row.hi + 1)]
+                    self.assertEqual(covered, list(keys))
+
+    def test_adjacent_rows_never_repeat_a_move(self):
+        for up in UPCARDS:
+            ch = column(up)
+            for block in (ch.hard, ch.soft, ch.pairs):
+                for prev, row in zip(block, block[1:]):
+                    # Aces are listed first but numbered 11, so the pair of
+                    # aces stays its own row however it is played.
+                    if row.lo == prev.hi + 1:
+                        self.assertIsNot(prev.action, row.action,
+                                         f"{prev.label} and {row.label} should "
+                                         "have merged")
+
+    def test_a_pair_is_read_off_the_pairs_block_only_when_it_can_be_split(self):
+        ch = column(6)
+        block, i = ch.locate(16, False, 8)
+        self.assertEqual(block, "pairs")
+        self.assertIs(ch.pairs[i].action, Action.SPLIT)
+        block, i = ch.locate(16, False, None)    # already at four hands
+        self.assertEqual(block, "hard")
+        self.assertIs(ch.hard[i].action, Action.STAND)
+
+    def test_a_soft_hand_is_read_off_the_soft_block(self):
+        ch = column(6)
+        self.assertEqual(ch.locate(18, True, None)[0], "soft")
+        self.assertEqual(ch.locate(18, False, None)[0], "hard")
+
+    def test_a_hand_with_nothing_left_to_decide_is_on_no_row(self):
+        self.assertIsNone(column(6).locate(21, False, None))
+
+    def test_the_column_is_derived_once_and_kept(self):
+        """It costs milliseconds to derive and, since the trainer does not
+        count, never changes -- so it must not be rebuilt every frame."""
+        self.assertIs(trainer.chart(6, 3), trainer.chart(6, 3))
+
+
+# ---------------------------------------------------------------------------
 # reading the table
 # ---------------------------------------------------------------------------
 class ReadTests(unittest.TestCase):

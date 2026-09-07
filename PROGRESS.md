@@ -39,7 +39,8 @@ blackjack/app.py       screen composition, animation, input
 blackjack/__main__.py  argument parsing, curses.wrapper
 tools/verify_odds.py   basic-strategy simulator
 tests/test_engine.py   48 rules tests
-tests/test_trainer.py  33 trainer tests
+tests/test_trainer.py  42 trainer and chart tests
+tests/test_app.py      10 key-handling and layout tests
 termjack               launcher
 ```
 
@@ -78,9 +79,25 @@ termjack               launcher
   panel interior at the 76-column minimum (72 chars including the head), and
   `NoteFitsThePanelTests` walks the whole chart to hold that.
 
+- **Chart layout.** Two columns: hard and soft totals on the left, pairs on
+  the right. Sized once for the tallest and widest any upcard makes it
+  (`CHART_BODY_H`, `CHART_LEFT_W`, `CHART_RIGHT_W`), so it does not resize as
+  the dealer's card changes; `ChartLayoutTests` walks all ten columns to hold
+  that. It docks inside the TABLE panel behind a vertical divider when the
+  felt keeps at least `CARDS_MIN_W` after giving up `CHART_DOCK_W` — 92
+  columns and up — and otherwise lays over the right of the table, which
+  leaves the dealer and the first hand readable behind it. Over the felt it
+  waits for an upcard rather than covering the bet with a placeholder; docked
+  it shows the placeholder, since it is covering nothing.
+- **Chart cost.** A column is ~8 ms to derive, which is too much per frame, so
+  `trainer.chart` is `lru_cache`d. Ten upcards, one derivation each per run.
+- **The idle splash reflows.** A docked chart leaves too little felt for the
+  house rules to sit beside the fanned cards, so below that width they drop
+  under the title instead of being cut off mid-sentence.
+
 ## Verification
 
-- `python3 -m unittest discover -s tests` — 84 tests, all passing.
+- `python3 -m unittest discover -s tests` — 100 tests, all passing.
 - The trainer's expected values reproduce the basic-strategy chart in
   `tools/verify_odds.py` cell for cell: every hard total, every soft total,
   every pair. That is the check that matters — the advice is only worth
@@ -129,3 +146,18 @@ termjack               launcher
   Unicode and `--ascii`, across hit / stand / double / split / insurance.
 - `verify_odds.py` re-run at 500k hands: 0.462% house edge, unchanged. The
   engine was not touched.
+
+### 2026-09-07 (later still) — chart
+- `c` shows the strategy column for the dealer's upcard. `trainer.read` was
+  split into `trainer.evaluate` (decks, cards, upcard, actions) with `read`
+  as a thin wrapper, so the chart and the coach price moves through one path.
+- `trainer.chart(decks, up)` builds the column: a representative two-card hand
+  per hard total, soft total and pair, priced, then adjacent rows sharing a
+  verdict merged into ranges. Merging only joins genuinely adjacent keys, so
+  the ace pairs -- listed first but numbered 11 -- never fold into the 2s.
+- Docked beside the felt from 92 columns, over the right of the table below
+  that. New `tee_d` / `tee_u` / `joint` glyphs so the divider meets the
+  panel border and the dealer/player rule properly. The shoe reading moves in
+  with the felt when the chart docks.
+- Checked in tmux at 76x22, 80x24, 92x24, 100x28 and 120x34, Unicode and
+  `--ascii`, across betting, insurance, a pair, a soft hand and a split.
