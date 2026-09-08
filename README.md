@@ -2,37 +2,17 @@
 
 A classic blackjack table in the terminal.
 
-```
-╭─ TABLE ───────────────────────────────────────── shoe 98% ─╮╭─ CHIPS ────────╮
-│ DEALER   showing 6                                         ││                │
-│   ╭───╮ ╭───╮                                              ││ Bank      $450 │
-│   │6  │ │▓▓▓│                                              ││ Bet        $25 │
-│   │  ♠│ │▓▓▓│                                              ││ Net         $0 │
-│   ╰───╯ ╰───╯                                              ││                │
-├────────────────────────────────────────────────────────────┤│ Shoe           │
-│ PLAYER  (2 hands)                                          ││ ██████████████ │
-│ ▸  18              14                                      ││ ────────────── │
-│ ▸ ╭───╮ ╭───╮     ╭───╮ ╭───╮                              ││ Won          0 │
-│   │8  │ │J  │     │8  │ │6  │                              ││ Lost         0 │
-│   │  ♦│ │  ♣│     │  ♣│ │  ♥│                              ││ Push         0 │
-│   ╰───╯ ╰───╯     ╰───╯ ╰───╯                              ││ BJ           0 │
-│   $25             $25                                      ││ Calls      1/1 │
-│                                                            ││ Calls %   100% │
-╰────────────────────────────────────────────────────────────╯╰────────────────╯
-╭─ TRAINER ──────────────────────────────────────── split +0.33 / stand -0.16 ─╮
-│ ✓ Split. Always split 8s - 16 is the worst hand you can hold.                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ YOUR TURN ──────────────────────────────────────────────────────────────────╮
-│ Split.                                                                       │
-╰──────────────────────────────────────────────────────────────────────────────╯
- [h]it   [s]tand   [d]ouble   [c]hart   [t]rainer                       [q]uit
-```
+![The table mid-round: a pair of 8s split against the dealer's 6, with the
+trainer grading the call](docs/screenshots/table.png)
 
 ## Play
 
 ```sh
 ./termjack           # or: python3 -m blackjack
 ```
+
+![The opening screen: house rules, the bet, and the shoe gauge in the
+sidebar](docs/screenshots/bet.png)
 
 No dependencies — Python 3.10 or newer and its standard `curses` module, which
 ships with Python on Linux and macOS. Needs a terminal of at least 76x22, or
@@ -104,6 +84,10 @@ in units of your bet:
 you got right. Only the best move counts: a `≈` is close enough not to be
 worth scolding you over, but it does not score.
 
+![A hand settled after standing on 11 against a ten: the trainer marks
+the call wrong and prices the double it
+should have been](docs/screenshots/trainer.png)
+
 The tally only takes calls you could read and calls you could make. Nothing
 is graded while the panel is down — `t` hides it, and on a terminal too short
 to seat its three rows it sits out rather than take them from the felt — and
@@ -159,6 +143,9 @@ a pair of kings against an 8:
 On a wide terminal the chart docks beside the felt, behind a divider, and the
 cards keep the rest. Where there is not enough width left to deal onto, it
 lays over the right of the table instead — `c` again puts the felt back.
+
+![The chart docked beside the felt, the pairs row for the hand on the table
+marked](docs/screenshots/chart.png)
 
 The column is derived, not transcribed: each row is priced by the same code
 that grades your moves, then rows that agree are merged into a range, which is
