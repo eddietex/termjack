@@ -19,7 +19,13 @@ record of how it got here and what is worth knowing before changing it.
   each and are never a blackjack. Reshuffle at the cut card (75% penetration).
 - **Architecture:** the rules engine imports no curses and does no I/O, so it
   is unit-testable and can be driven by a simulator. curses lives only in
-  `theme.py` / `render.py` / `app.py`.
+  `theme.py` / `render.py` / `app.py`. `trainer.py` follows the same rule.
+- **Trainer:** advice is computed, not looked up. Every legal move is priced
+  from the dealer's outcome distribution each time a decision comes up, and
+  the explanation is generated from the same numbers, so the prose can never
+  contradict the verdict. Deliberately *not* a card counter: it prices against
+  a full shoe less the cards showing, which is how basic strategy is derived,
+  so the same hand always earns the same advice.
 
 ## Layout
 
@@ -28,10 +34,13 @@ blackjack/cards.py     Card / Suit / Shoe                    (pure)
 blackjack/engine.py    Hand, Round state machine, payouts    (pure)
 blackjack/theme.py     colour pairs + glyphs, ASCII fallback
 blackjack/render.py    panel/card/gauge primitives
+blackjack/trainer.py   expected values, graded advice        (pure)
 blackjack/app.py       screen composition, animation, input
 blackjack/__main__.py  argument parsing, curses.wrapper
 tools/verify_odds.py   basic-strategy simulator
-tests/test_engine.py   48 unit tests
+tests/test_engine.py   48 rules tests
+tests/test_trainer.py  42 trainer and chart tests
+tests/test_app.py      10 key-handling and layout tests
 termjack               launcher
 ```
 
@@ -55,10 +64,49 @@ termjack               launcher
   the table, against the buy-in, so it does not dip while a hand is live.
 - **Integer chips.** Payouts floor, so a $25 blackjack pays $37, not $37.50.
   Deliberate: chips are whole dollars.
+- **Trainer layout.** The panel wants 3 rows and the table will not go below
+  `TABLE_MIN_H` (15), so it only appears at 23 rows or more. Below that
+  `App.trainer_shown` is false and the coach does not grade at all — tallying
+  moves the player cannot read would only skew `Calls`. The sidebar divider
+  moved up one row to make room for `Calls` and `Ins.` inside the shorter
+  panel; both are bounds-checked against the panel floor before drawing.
+- **Grading happens before the engine moves.** `Coach.review` is called with
+  the pre-action hand, in `_handle_player`, ahead of `game.act`. The note then
+  stays up through the deal animation and the settlement — it grades the
+  decision, not the outcome, so it spoils nothing — and is cleared on the
+  next deal.
+- **Trainer prose fits one line.** Every explanation is written to fit the
+  panel interior at the 76-column minimum (72 chars including the head), and
+  `NoteFitsThePanelTests` walks the whole chart to hold that.
+
+- **Chart layout.** Two columns: hard and soft totals on the left, pairs on
+  the right. Sized once for the tallest and widest any upcard makes it
+  (`CHART_BODY_H`, `CHART_LEFT_W`, `CHART_RIGHT_W`), so it does not resize as
+  the dealer's card changes; `ChartLayoutTests` walks all ten columns to hold
+  that. It docks inside the TABLE panel behind a vertical divider when the
+  felt keeps at least `CARDS_MIN_W` after giving up `CHART_DOCK_W` — 92
+  columns and up — and otherwise lays over the right of the table, which
+  leaves the dealer and the first hand readable behind it. Over the felt it
+  waits for an upcard rather than covering the bet with a placeholder; docked
+  it shows the placeholder, since it is covering nothing.
+- **Chart cost.** A column is ~8 ms to derive, which is too much per frame, so
+  `trainer.chart` is `lru_cache`d. Ten upcards, one derivation each per run.
+- **The idle splash reflows.** A docked chart leaves too little felt for the
+  house rules to sit beside the fanned cards, so below that width they drop
+  under the title instead of being cut off mid-sentence.
 
 ## Verification
 
-- `python3 -m unittest discover -s tests` — 48 tests, all passing.
+- `python3 -m unittest discover -s tests` — 100 tests, all passing.
+- The trainer's expected values reproduce the basic-strategy chart in
+  `tools/verify_odds.py` cell for cell: every hard total, every soft total,
+  every pair. That is the check that matters — the advice is only worth
+  giving if the arithmetic behind it lands where the book does. Its dealer
+  bust rates also match published S17 tables to a tenth of a point.
+- The one deliberate divergence is a three-or-more-card 16 against a ten,
+  which stands. Real composition-dependent play, always inside the coin-flip
+  threshold, and tested as such.
+- Grading costs ~0.2 ms per decision, against a 30 ms frame budget.
 - `python3 tools/verify_odds.py` — 500k hands of perfect basic strategy give a
   0.462% house edge and a 43.50 / 47.98 / 8.52 win-lose-push split, matching
   published figures for these rules. This is the sharpest check that the rules
@@ -84,3 +132,88 @@ termjack               launcher
   the live bet, dealer/player cards not aligning, duplicated BUST/BLACKJACK
   badges, the felt stretching on tall terminals, split hands drifting apart on
   wide ones, and the split reveal index.
+
+### 2026-09-07 (later) — trainer
+- Added `blackjack/trainer.py`: dealer outcome distribution (S17, conditioned
+  on the peek having ruled out a natural), then stand/hit/double/split
+  expected values, a `Situation` reading of the hand in front of the player,
+  and a `Coach` that grades the move played against the best one.
+- New TRAINER panel above the result panel, same shape. `t` toggles it,
+  `--no-trainer` starts it hidden. `Calls` in the sidebar tracks the tally.
+- Insurance gets graded too, which is where the trainer earns its keep: it
+  says decline even on the hands where insurance would have paid.
+- Checked in tmux at 76x22 (panel correctly sits out), 80x24 and 120x34, in
+  Unicode and `--ascii`, across hit / stand / double / split / insurance.
+- `verify_odds.py` re-run at 500k hands: 0.462% house edge, unchanged. The
+  engine was not touched.
+
+### 2026-09-07 (later still) — chart
+- `c` shows the strategy column for the dealer's upcard. `trainer.read` was
+  split into `trainer.evaluate` (decks, cards, upcard, actions) with `read`
+  as a thin wrapper, so the chart and the coach price moves through one path.
+- `trainer.chart(decks, up)` builds the column: a representative two-card hand
+  per hard total, soft total and pair, priced, then adjacent rows sharing a
+  verdict merged into ranges. Merging only joins genuinely adjacent keys, so
+  the ace pairs -- listed first but numbered 11 -- never fold into the 2s.
+- Docked beside the felt from 92 columns, over the right of the table below
+  that. New `tee_d` / `tee_u` / `joint` glyphs so the divider meets the
+  panel border and the dealer/player rule properly. The shoe reading moves in
+  with the felt when the chart docks.
+- Checked in tmux at 76x22, 80x24, 92x24, 100x28 and 120x34, Unicode and
+  `--ascii`, across betting, insurance, a pair, a soft hand and a split.
+
+### 2026-09-07 (later again) — casino pacing
+- The deal is now a queue of timed `Beat`s in `app.py` rather than one tick
+  counter: each names a card (or the hole card, or a held pause) and the dead
+  air in front of it. The engine still resolves a whole action at once, and
+  `_stage` turns the difference between what it holds and what is on the felt
+  into the beats that put the rest down a card at a time.
+- `render.draw_turning` animates a card turning over: it lands face down,
+  narrows through `╭─╮` to a bare `│` seen edge on, and opens out face up.
+  Five frames, and the mid-turn frames carry no rank because a card halfway
+  round shows none. Works in `--ascii` too (`+-+`, then `|`).
+- Beats chain from when they were due rather than from now, so a slow frame
+  does not stretch the rest of the deal.
+- The hole card gets a beat of its own (`HOLE_BEAT`), and the dealer's draws
+  are slower than the opening pitch. A `wait` beat holds the last card before
+  the round is called.
+- Chased down everything that gave the result away early: totals now count up
+  with the cards on the felt (`app.visible`) instead of reading the engine's
+  hand, an empty seat shows no total at all, the message panel stops titling
+  itself RESULT and lighting its focus ring mid-deal, and the sidebar rewinds
+  the payouts and the W/L/P/BJ tally the engine books at settlement until the
+  table has actually called the hand (`App.uncalled`).
+- Checked in tmux at 76x22 `--ascii`, 100x30 and 120x34 with the trainer and
+  a docked chart, frame by frame across the opening deal, a split, the hole
+  card turn, a dealer draw-out and the skip key.
+- Then leaked the hole card twice over, both times through the animation:
+  first because the turn it lands on ended face up like any other card, then,
+  fixing that, because the `HOLE_BEAT` pause let go of `hole_down` before the
+  turn had started. The card is now down unless the table has turned it up,
+  and the single moment in between is its own turn (`App.hole_hidden`).
+- New `tests/test_render.py`: a stub window that records what was written and
+  a stubbed colour lookup, so the drawing can be asserted on without a
+  terminal. It is what catches the first leak -- the pure frame table
+  (`render.turn_frame`) was right, the call site in `draw_hand` was not.
+  Both bugs were reproduced against the tests before the fixes went back in.
+- The animation tests deal on a seeded shoe. The unseeded one was passing on
+  the luck of the shuffle: a natural off the deal turns the hole card during
+  the opening, which broke the moment an unrelated test changed draw order.
+
+### 2026-09-07 (last) — animation toggle
+- `a` turns the deal animation on and off, with `--no-animation` to start that
+  way, matching how `t` and `c` are paired with their flags. With it off
+  `_stage` hands straight to `_reveal_all`, so the engine's cards go onto the
+  felt as they are dealt -- and the hole card is still a hole card.
+- It is handled ahead of the any-key skip, so pressing it part way through a
+  deal both turns the animation off and drops what is still coming, which is
+  the moment a player actually reaches for it.
+- Its hint leads the toggles. `c` and `t` describe panels you can see for
+  yourself; whether the animation is on is invisible on an idle felt, so the
+  hint (bright on, dim off) is the only thing that says so. At 76 columns --
+  the documented minimum -- the bar has room for two of the three, and this
+  ordering means `[t]rainer` is the one that gives way instead of `[a]nim`.
+- Fixed a latent overrun in `_draw_hints` that adding a seventh hint exposed:
+  it drew each hint and only then checked whether it had gone too far, so the
+  last one could run into `[q]uit`. It now measures first, via a new
+  `render.hint_width` sharing `render.hint_rest` with `keyhint`.

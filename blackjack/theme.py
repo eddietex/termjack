@@ -95,18 +95,22 @@ class Glyphs:
             self.tl, self.tr, self.bl, self.br = "╭", "╮", "╰", "╯"
             self.h, self.v = "─", "│"
             self.tee_l, self.tee_r = "├", "┤"
+            self.tee_d, self.tee_u, self.joint = "┬", "┴", "┼"
             self.card_tl, self.card_tr = "╭", "╮"
             self.card_bl, self.card_br = "╰", "╯"
             self.back = "▓"
             self.gauge_full, self.gauge_empty = "█", "░"
             self.marker = "▸"
+            self.tick, self.cross, self.near = "✓", "✗", "≈"
             self.suits = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
         else:
             self.tl = self.tr = self.bl = self.br = "+"
             self.h, self.v = "-", "|"
             self.tee_l, self.tee_r = "+", "+"
+            self.tee_d = self.tee_u = self.joint = "+"
             self.card_tl = self.card_tr = self.card_bl = self.card_br = "+"
             self.back = "#"
             self.gauge_full, self.gauge_empty = "#", "."
             self.marker = ">"
+            self.tick, self.cross, self.near = "+", "x", "~"
             self.suits = {"S": "s", "H": "h", "D": "d", "C": "c"}
